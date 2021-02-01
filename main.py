@@ -8,6 +8,8 @@ import numpy as np
 from datetime import datetime
 import re
 
+start_time = datetime.now()
+
 print('''
       # PREVIOUS VS CURRENT SNAPSHOT AUTOMATION #
 ''')
@@ -22,11 +24,17 @@ os.chdir(script_directory)
 try:
     filename = glob.glob('*.xls')[0]  # Think of how to throw an error if no xls found
     print('Found .xls file: ' + filename)
-except FileNotFoundError:
+except (FileNotFoundError, IndexError):
     print('\n.xls file is not found\n')
+    try:
+        filename = glob.glob('*.xlsx')[0]  # Think of how to throw an error if no xls found
+        print('Found .xlsx file: ' + filename)
+    except (FileNotFoundError, IndexError):
+        print('\n.xlsx file is not found\n')
 
 
 # Read file and create df using pandas:
+print('Reading file...\n')
 df = pd.read_excel(filename, header=None)
 
 # Save two first cells in first column as title
@@ -51,6 +59,7 @@ try:
 except FileNotFoundError:
     print('\nremove_products.csv has not been provided\n')
 
+print('Reshaping file...\n')
 # Check for NaNs and replace with 0
 df.isna().sum().sum()
 df = df.fillna(0)
@@ -68,9 +77,21 @@ def select_cols(substring):
     result = [colname for colname in cols if substring in colname]
     return result
 
+
 # Apply function to select columns related to curr, prev:
 curr_colnames = select_cols('curr')
 prev_colnames = select_cols('prev')
+
+# Remove rows with 0 change in all years?
+
+pick = input('Remove rows with no change in any year? (Y/N): ')
+if pick == 'Y':
+    rows_from = df.shape[0]
+    df['zerochange'] = df[select_cols('act diff')].sum(axis=1)
+    df = df[df.zerochange != 0].reset_index()
+    df.drop('zerochange', axis=1, errors='ignore', inplace=True)
+    rows_to = df.shape[0]
+    print(f'Row size reduced from {str(rows_from)} to {str(rows_to)}')
 
 curr = df[main_colnames + curr_colnames]
 prev = df[main_colnames + prev_colnames]
@@ -84,7 +105,7 @@ prev = prev.melt(main_colnames, value_name='Previous')
 
 df_joined = curr.merge(prev, how="left")
 df_joined['Actual Difference'] = df_joined.Current - df_joined.Previous
-df_joined['% Difference'] = 100 * ((df_joined.Current/df_joined.Previous)-1)
+df_joined['% Difference'] = (df_joined.Current/df_joined.Previous)-1
 
 df_joined['% Difference'].fillna(0, inplace=True)
 df_joined.rename(columns={'variable': 'Year'}, inplace=True)
@@ -115,14 +136,14 @@ df_joined['Period'] = np.where(df_joined.Year == current_year, 'Current', df_joi
 grouping = ['Region', 'Country', 'Sector', 'Product', 'Data type', 'Unit']
 df_joined.sort_values(grouping, inplace=True)
 
-df_hist = df_joined[df_joined['Period']=='Historic'].reset_index(drop=True)
-df_curr = df_joined[df_joined['Period']=='Current'].reset_index(drop=True)
-df_forecast = df_joined[df_joined['Period']=='Forecast'].reset_index(drop=True)
+df_hist = df_joined[df_joined['Period'] == 'Historic'].reset_index(drop=True)
+df_curr = df_joined[df_joined['Period'] == 'Current'].reset_index(drop=True)
+df_forecast = df_joined[df_joined['Period'] == 'Forecast'].reset_index(drop=True)
 
 
 hist_ch = df_hist.groupby(grouping, as_index=False)['% Difference'].apply(lambda x: x.abs().max())\
     .rename(columns={'% Difference': 'Historic years max abs %diff'})
-curr_ch= df_curr.groupby(grouping, as_index=False)['% Difference'].apply(lambda x: x.abs().max())\
+curr_ch = df_curr.groupby(grouping, as_index=False)['% Difference'].apply(lambda x: x.abs().max())\
     .rename(columns={'% Difference': 'Current year max abs %diff'})
 forecast_ch = df_forecast.groupby(grouping, as_index=False)['% Difference'].apply(lambda x: x.abs().max())\
     .rename(columns={'% Difference': 'Forecast max abs %diff'})
@@ -179,8 +200,10 @@ proj = "-".join([x.strip() for x in list(output["Sub-project"].unique()
 timestamp = datetime.now().strftime("%d %b %Y")
 title = str(proj + " Key Data Revisions - " + timestamp)
 file = str(title + ".xlsx")
-
-writer = pd.ExcelWriter(file, engine='xlsxwriter')
+output_folder = 'output'
+if not os.path.exists(output_folder):
+    os.makedirs(output_folder)
+writer = pd.ExcelWriter(os.path.join(output_folder, file), engine='xlsxwriter')
 
 # Convert the dataframe to an XlsxWriter Excel object.
 global_output.to_excel(writer, sheet_name='Global and Regional', startrow=4, index=False, header=True)
@@ -233,6 +256,7 @@ format_perc = workbook.add_format({'num_format': '0%',
                                    'bg_color': '#F5DF4D'})
 
 for i in perc_rows_global:
+
     i += 5
     global_sheet.conditional_format(i, 7, i, 25, {'type': 'no_errors',
                                                   'format': format_perc})
@@ -256,5 +280,7 @@ country_sheet.set_column('D:G', 13)
 writer.save()
 
 print('"' + file + '" file was created. Press any button to close.')
+end_time = datetime.now()
+print('Time: ' + str(end_time-start_time))
 input()
 
